@@ -39,6 +39,7 @@ set(WEBACCESS_SOURCES
 if(qmlui)
     list(APPEND WEBACCESS_SOURCES
         webaccess-qml.cpp webaccess-qml.h
+        webaccess-qml-agent.cpp
     )
 else()
     list(APPEND WEBACCESS_SOURCES

@@ -513,6 +513,18 @@ void WebAccessQml::slotHandleWebSocketRequest(QHttpConnection *conn, QString dat
             m_vc->setSelectedPage(cmdList[1].toInt());
         return;
     }
+    else if (cmdList[0] == "QLC+AGENT")
+    {
+        /* Agent API: create and manage the project on the live document.
+         * See docs/agent-api.md for the protocol. */
+        if (m_auth && user && user->level < VC_ONLY_LEVEL)
+            return;
+
+        const QString agentReply = handleAgentCommand(cmdList);
+        if (agentReply.isEmpty() == false)
+            conn->webSocketWrite(agentReply);
+        return;
+    }
     if (handleCommonWebSocketCommand(conn, user, cmdList, "[webaccess-v5]", true))
         return;
     else if (cmdList[0] == "QLC+API")

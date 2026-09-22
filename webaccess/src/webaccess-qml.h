@@ -109,6 +109,11 @@ protected:
     QJsonObject frameToJson(const VCFrame *frame);
     void collectWidgets(const VCFrame *frame, QList<VCWidget *> &list, bool recursive = true) const;
 
+    /** Agent API: create and manage the project over the websocket.
+     *  See docs/agent-api.md. Returns the reply message to send back. */
+public:
+    QString handleAgentCommand(const QStringList &cmdList);
+
     void setupWidgetConnections(const VCWidget *widget);
     QString widgetBackgroundImagePath(const VCWidget *widget) const;
 
