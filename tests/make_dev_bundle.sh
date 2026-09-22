@@ -40,6 +40,16 @@ find "$BUILD" -maxdepth 1 -name "*.qm" -exec cp {} "$BUNDLE/Contents/Resources/T
 
 cp "$SRC/platforms/macos/Info.plist.qmlui" "$BUNDLE/Contents/Info.plist" 2>/dev/null || true
 
+# The macOS install step normally copies the icon and substitutes the version; without both, the
+# Dock shows a generic icon (and a placeholder version). Do it here so the dev bundle behaves.
+cp "$SRC/resources/icons/qlcplus.icns" "$BUNDLE/Contents/Resources/qlcplus.icns"
+VERSION=$(grep -m1 'set(APPVERSION' "$SRC/variables.cmake" | grep -oE '"[0-9]+\.[0-9]+\.[0-9]+"' | tr -d '"')
+sed -i '' "s/__QLC_VERSION__/${VERSION:-dev}/g" "$BUNDLE/Contents/Info.plist"
+
+# Launched via `open -na <bundle> --args ...`, macOS treats it as a real app (icon, Dock entry,
+# activation); running Contents/MacOS/qlcplus-qml directly from a shell never will.
+echo "identity: $(/usr/libexec/PlistBuddy -c 'Print CFBundleName' "$BUNDLE/Contents/Info.plist" 2>/dev/null) $VERSION"
+
 echo "bundle ready: $BUNDLE"
 ls "$BUNDLE/Contents/MacOS" | head -20
 echo "resources: $(ls "$BUNDLE/Contents/Resources" | tr '\n' ' ')"
