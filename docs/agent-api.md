@@ -51,7 +51,7 @@ Writes:
 
 | verb | args | notes |
 |---|---|---|
-| `addFixture` | `{manufacturer, model, mode, name, universe, address, quantity=1, gap=0}` | ≥1 fixture; engine adds them to the live document |
+| `addFixture` | `{manufacturer, model, mode, name, universe, address, quantity=1, gap=0, channels=1}` | ≥1 fixture; `Generic Dimmer` is generated (needs `channels`), no `.qxf` required |
 | `removeFixture` | `{id}` | |
 | `setFixtureAddress` | `{id, universe, address}` | move/re-patch a fixture |
 | `setFixtureName` | `{id, name}` | |

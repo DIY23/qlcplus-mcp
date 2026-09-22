@@ -57,6 +57,7 @@
 #include "qlcfixturemode.h"
 #include "qlcfixturedefcache.h"
 #include "qlcchannel.h"
+#include "qlcconfig.h"
 #include "universe.h"
 
 #include "virtualconsole.h"
@@ -162,17 +163,44 @@ static QString widgetElement(const QString &type)
     return QString();
 }
 
-/** Build the XML description of one widget, exactly as the project file stores it. */
+/** Build the XML description of one widget, exactly as the project file stores it.
+ *  Each widget type stores its bound function differently, so the snippet differs. */
+static QString widgetFunctionXml(const QString &element, quint32 functionId)
+{
+    if (functionId == Function::invalidId())
+        return QString();
+    if (element == "Button")
+        return QString("<Function ID=\"%1\"/>").arg(functionId);
+    if (element == "CueList")
+        return QString("<Chaser>%1</Chaser>").arg(functionId);
+    if (element == "Slider")
+        return QString("<Adjust Function=\"%1\"/>").arg(functionId);
+    return QString();
+}
+
 static QByteArray widgetXml(const QString &element, quint32 id, const QString &caption,
                             int x, int y, int w, int h, quint32 functionId)
 {
     QString xml = QString("<%1 ID=\"%2\" Caption=\"%3\">").arg(element).arg(id).arg(xmlEscape(caption));
     xml += QString("<WindowState Visible=\"true\" X=\"%1\" Y=\"%2\" Width=\"%3\" Height=\"%4\"/>")
                .arg(x).arg(y).arg(w).arg(h);
-    if (functionId != Function::invalidId())
-        xml += QString("<Function ID=\"%1\"/>").arg(functionId);
+    xml += widgetFunctionXml(element, functionId);
     xml += QString("</%1>").arg(element);
     return xml.toUtf8();
+}
+
+/** Bind a function to a widget through the setter that widget type actually has. */
+static bool applyWidgetFunction(VCWidget *widget, quint32 functionId)
+{
+    const char *setter = nullptr;
+    switch (widget->type())
+    {
+        case VCWidget::ButtonWidget:  setter = "setFunctionID";         break;
+        case VCWidget::SliderWidget:  setter = "setControlledFunction"; break;
+        case VCWidget::CueListWidget: setter = "setChaserID";           break;
+        default: return false;
+    }
+    return QMetaObject::invokeMethod(widget, setter, Q_ARG(quint32, functionId));
 }
 
 /****************************************************************************
@@ -475,6 +503,8 @@ QString WebAccessQml::handleAgentCommand(const QStringList &cmdList)
         const QString model = jsonString(args, "model");
         const QString modeName = jsonString(args, "mode");
         const QString name = jsonString(args, "name");
+        const bool genericDimmer = model.compare("Generic Dimmer", Qt::CaseInsensitive) == 0;
+        const int dimmerChannels = args.value("channels").toInt(1);
         int universe = args.value("universe").toInt(0);
         int address = args.value("address").toInt(0);
         int quantity = args.value("quantity").toInt(1);
@@ -483,21 +513,50 @@ QString WebAccessQml::handleAgentCommand(const QStringList &cmdList)
         if (manuf.isEmpty() || model.isEmpty())
             return agentErr(verb, reqId, "manufacturer and model are required");
 
-        QLCFixtureDef *def = m_doc->fixtureDefCache()->fixtureDef(manuf, model);
-        if (def == nullptr)
-            return agentErr(verb, reqId, QString("unknown fixture definition: %1 %2").arg(manuf, model));
+        /* Resolve the definition once, only to learn the channel count and to
+         * fail early on a typo. Generic Dimmer has no .qxf: it is generated per
+         * fixture, exactly as the GUI does it. */
+        QLCFixtureDef *def = genericDimmer ? nullptr : m_doc->fixtureDefCache()->fixtureDef(manuf, model);
+        QLCFixtureMode *mode = nullptr;
 
-        QLCFixtureMode *mode = modeName.isEmpty() ? def->modes().first() : def->mode(modeName);
-        if (mode == nullptr)
-            return agentErr(verb, reqId, QString("unknown mode '%1' for %2 %3").arg(modeName, manuf, model));
+        if (genericDimmer)
+        {
+            if (dimmerChannels < 1)
+                return agentErr(verb, reqId, "generic dimmer needs at least one channel");
+        }
+        else
+        {
+            if (def == nullptr)
+                return agentErr(verb, reqId, QString("unknown fixture definition: %1 %2").arg(manuf, model));
 
-        const int channels = mode->channels().count();
-        if (channels == 0)
-            return agentErr(verb, reqId, "fixture mode has no channels");
+            if (modeName.isEmpty())
+                mode = def->modes().first();
+            else
+            {
+                mode = def->mode(modeName);
+                if (mode == nullptr)
+                    return agentErr(verb, reqId, QString("unknown mode '%1' for %2 %3").arg(modeName, manuf, model));
+            }
+            if (mode->channels().count() == 0)
+                return agentErr(verb, reqId, "fixture mode has no channels");
+        }
 
         QJsonArray created;
         for (int i = 0; i < quantity; i++)
         {
+            Fixture *fixture = new Fixture(m_doc);
+
+            /* Generic Dimmer: definition and mode are generated by the fixture,
+             * which takes ownership of both (same as FixtureManager does). */
+            QLCFixtureDef *useDef = def;
+            QLCFixtureMode *useMode = mode;
+            if (genericDimmer)
+            {
+                useDef = fixture->genericDimmerDef(dimmerChannels);
+                useMode = fixture->genericDimmerMode(useDef, dimmerChannels);
+            }
+
+            const int channels = useMode->channels().count();
             if (address + channels > UNIVERSE_SIZE)
             {
                 universe++;
@@ -509,10 +568,9 @@ QString WebAccessQml::handleAgentCommand(const QStringList &cmdList)
                 }
             }
 
-            Fixture *fixture = new Fixture(m_doc);
             fixture->setAddress(quint32(address));
             fixture->setUniverse(quint32(universe));
-            fixture->setFixtureDefinition(def, mode);
+            fixture->setFixtureDefinition(useDef, useMode);
 
             if (m_doc->addFixture(fixture) == false)
             {
@@ -798,6 +856,9 @@ QString WebAccessQml::handleAgentCommand(const QStringList &cmdList)
 
         QJsonObject result;
         result["id"] = int(function->id());
+        result["requested"] = run;
+        /* the engine flips isRunning() on its next timer tick, so this is the
+         * state as observed right after the request - poll to confirm */
         result["running"] = function->isRunning();
         return agentOk(verb, reqId, result);
     }
@@ -856,15 +917,14 @@ QString WebAccessQml::handleAgentCommand(const QStringList &cmdList)
         if (page == nullptr)
             return agentErr(verb, reqId, "page index out of range");
 
-        /* next free widget ID across all pages */
-        quint32 newId = 0;
-        QList<VCWidget*> existing;
-        for (int i = 0; i < m_vc->pagesCount(); i++)
+        /* next free widget ID: the Virtual Console's widget registry is authoritative
+         * (page frames included), unlike walking the page trees. */
+        quint32 newId = 1;
+        const QVariantList registered = m_vc->widgetsList();
+        for (const QVariant &entry : registered)
         {
-            collectWidgets(m_vc->page(i), existing, true);
-            for (VCWidget *widget : existing)
-                newId = qMax(newId, widget->id() + 1);
-            existing.clear();
+            const quint32 wid = entry.toMap().value("id", 0).toUInt();
+            newId = qMax(newId, wid + 1);
         }
 
         const quint32 functionId = jsonId(args, "functionId");
@@ -888,6 +948,15 @@ QString WebAccessQml::handleAgentCommand(const QStringList &cmdList)
         if (widget == nullptr)
             return agentErr(verb, reqId, "widget was created but not registered");
 
+        /* The QML item instantiated during render owns the initial look of the
+         * widget, so the requested values are applied afterwards (verified on
+         * 5.2.2: values loaded before render get replaced by QML defaults). */
+        if (functionId != Function::invalidId())
+            applyWidgetFunction(widget, functionId);
+        widget->setCaption(jsonString(args, "caption", type));
+        widget->setGeometry(QRectF(args.value("x").toInt(0), args.value("y").toInt(0),
+                                   args.value("w").toInt(120), args.value("h").toInt(60)));
+
         /* optional extra properties, applied by their QML property names */
         QJsonObject props = args.value("props").toObject();
         for (auto it = props.begin(); it != props.end(); ++it)
@@ -910,7 +979,14 @@ QString WebAccessQml::handleAgentCommand(const QStringList &cmdList)
             widget->setCaption(jsonString(args, "caption"));
 
         if (args.contains("functionId"))
-            widget->setProperty("functionID", jsonId(args, "functionId"));
+        {
+            const quint32 bindId = jsonId(args, "functionId");
+            if (m_doc->function(bindId) == nullptr)
+                return agentErr(verb, reqId, "no such function to bind");
+            if (applyWidgetFunction(widget, bindId) == false)
+                return agentErr(verb, reqId, QString("a %1 widget cannot have a function bound")
+                                               .arg(VCWidget::typeToString(widget->type())));
+        }
 
         if (args.contains("x") || args.contains("y") || args.contains("w") || args.contains("h"))
         {

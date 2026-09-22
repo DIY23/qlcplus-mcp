@@ -24,8 +24,8 @@ import sys
 import time
 from pathlib import Path
 
-BIN = Path("/Users/tom/Hermes/qlcplus/build/qmlui/qlcplus-qml")
-OUT_PROJECT = Path("/Users/tom/Hermes/qlcplus/tests/out/agent-smoke.qxw")
+BIN = Path(os.environ.get("QLC_BIN", "/tmp/QLC+Agent.app/Contents/MacOS/qlcplus-qml"))
+OUT_PROJECT = Path("/Users/tom/Hermes/qlcplus/src/tests/out/agent-smoke.qxw")
 
 
 def port_open(host: str, port: int) -> bool:
@@ -79,11 +79,11 @@ async def main() -> int:
     if OUT_PROJECT.exists():
         OUT_PROJECT.unlink()
 
-    print(f"starting {BIN} -w -p {args.port}")
+    print(f"starting {BIN} -w --web-port {args.port}")
     log = open("/tmp/qlcplus-agent-smoke.log", "wb")
     env = dict(os.environ)
     env["QLC_LOG"] = "1"
-    proc = subprocess.Popen([str(BIN), "-w", "-p", str(args.port)], stdout=log, stderr=log,
+    proc = subprocess.Popen([str(BIN), "-w", "--web-port", str(args.port)], stdout=log, stderr=log,
                             env=env, cwd="/Users/tom/Hermes/qlcplus/build")
     try:
         for _ in range(90):
@@ -129,13 +129,21 @@ async def main() -> int:
             check("patchUniverse patches output", patched.get("plugin") == "Loopback",
                   json.dumps(patched))
 
-            # 4. add fixtures (generic dimmer - always present in the fixture cache)
+            # 4. add fixtures - generic dimmer (generated, no .qxf) + a real def from the cache
             added = await client.call("addFixture",
                                       {"manufacturer": "Generic", "model": "Generic Dimmer",
-                                       "mode": "1 Channel", "name": "Smoke PAR",
+                                       "name": "Smoke PAR", "channels": 1,
                                        "universe": 0, "address": 0, "quantity": 4, "gap": 1})
             fixture_ids = added.get("ids", [])
-            check("addFixture creates 4 fixtures", len(fixture_ids) == 4, str(fixture_ids))
+            check("addFixture creates 4 generic dimmers", len(fixture_ids) == 4, str(fixture_ids))
+
+            rgb = await client.call("addFixture",
+                                    {"manufacturer": "Generic", "model": "Generic RGB",
+                                     "mode": "RGB", "name": "Smoke RGB",
+                                     "universe": 0, "address": 100})
+            check("addFixture patches a fixture from the .qxf cache",
+                  len(rgb.get("ids", [])) == 1, str(rgb.get("ids")))
+            rgb_id = rgb["ids"][0]
 
             # 5. scene with values on those fixtures
             scene = await client.call("createFunction",
@@ -172,21 +180,31 @@ async def main() -> int:
                                         "w": 260, "h": 320, "caption": "Smoke Cues",
                                         "functionId": chaser_id})
             widget_id = widget.get("id")
-            check("addWidget creates a cue list", isinstance(widget_id, int) and widget_id > 0,
-                  json.dumps({k: widget.get(k) for k in ("id", "type", "caption", "page")}))
+            geom = widget.get("geometry", {})
+            check("addWidget creates a cue list with the requested caption and size",
+                  isinstance(widget_id, int) and widget_id > 0
+                  and widget.get("caption") == "Smoke Cues"
+                  and (geom.get("w"), geom.get("h")) == (260, 320),
+                  json.dumps({k: widget.get(k) for k in ("id", "type", "caption", "geometry", "page")}))
 
             # 8. widget readback
             widget_detail = await client.call("getWidget", {"id": widget_id})
             check("getWidget returns the widget", widget_detail.get("id") == widget_id,
                   f"type={widget_detail.get('type')} caption={widget_detail.get('caption')}")
 
-            # 9. run / stop the chaser
+            # 9. run / stop the chaser (the engine flips isRunning() on its next timer tick,
+            #    so the reply carries the requested state and the observed one)
             running = await client.call("setFunctionStatus", {"id": chaser_id, "run": True})
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.6)
+            observed_run = (await client.call("getFunction", {"id": chaser_id})).get("running")
             stopped = await client.call("setFunctionStatus", {"id": chaser_id, "run": False})
-            check("setFunctionStatus runs then stops", running.get("running") is True
-                  and stopped.get("running") is False,
-                  f"run={running.get('running')} stop={stopped.get('running')}")
+            await asyncio.sleep(0.6)
+            observed_stop = (await client.call("getFunction", {"id": chaser_id})).get("running")
+            check("setFunctionStatus runs then stops",
+                  running.get("requested") is True and observed_run is True
+                  and stopped.get("requested") is False and observed_stop is False,
+                  f"run requested={running.get('requested')} observed={observed_run}; "
+                  f"stop requested={stopped.get('requested')} observed={observed_stop}")
 
             # 10. unknown verb must error, not hang
             try:
@@ -206,10 +224,12 @@ async def main() -> int:
                 text = OUT_PROJECT.read_text(errors="replace")
                 has_scene = "Smoke - Full Up" in text
                 has_widget = "Smoke Cues" in text
-                has_fixture = text.count("<Fixture>") >= 4
-                check("saved project contains fixtures/scenes/widgets",
-                      has_scene and has_widget and has_fixture,
-                      f"scene={has_scene} widget={has_widget} fixtures={text.count('<Fixture>')}")
+                has_fixture = text.count("<Fixture>") >= 5
+                has_binding = f"<Chaser>{chaser_id}</Chaser>" in text
+                check("saved project contains fixtures, scenes, widget and cue-list binding",
+                      has_scene and has_widget and has_fixture and has_binding,
+                      f"scene={has_scene} widget={has_widget} fixtures={text.count('<Fixture>')} "
+                      f"binding={has_binding}")
 
             # 13. state reflects everything after the edits
             state2 = await client.call("getState")
