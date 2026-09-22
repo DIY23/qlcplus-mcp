@@ -634,6 +634,32 @@ QString WebAccessQml::handleAgentCommand(const QStringList &cmdList)
      * Universes / patching
      ************************************************************************/
 
+    else if (verb == "addUniverse")
+    {
+        InputOutputMap *iomap = m_doc->inputOutputMap();
+        const int requested = args.value("id").toInt(-1);
+        int index = requested >= 0 ? requested : iomap->universesCount();
+
+        if (requested >= 0 && requested < iomap->universesCount())
+        {
+            QJsonObject result;
+            result["id"] = requested;
+            result["created"] = false;
+            result["universes"] = int(iomap->universesCount());
+            return agentOk(verb, reqId, result);
+        }
+
+        if (iomap->addUniverse(quint32(index)) == false)
+            return agentErr(verb, reqId, QString("could not add universe %1").arg(index));
+
+        iomap->startUniverses();
+
+        QJsonObject result;
+        result["id"] = index;
+        result["created"] = true;
+        result["universes"] = int(iomap->universesCount());
+        return agentOk(verb, reqId, result);
+    }
     else if (verb == "patchUniverse")
     {
         const int universe = args.value("universe").toInt(-1);

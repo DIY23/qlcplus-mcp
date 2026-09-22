@@ -56,6 +56,7 @@ Writes:
 | `setFixtureAddress` | `{id, universe, address}` | move/re-patch a fixture |
 | `setFixtureName` | `{id, name}` | |
 | `patchUniverse` | `{universe, plugin, line, direction="output"}` | wraps existing `QLC+IO` patch path |
+| `addUniverse` | `{id?}` | creates a universe (QLC+ 5 starts with 4; a 467-fixture rig needs 7). Idempotent: replies `created=false` when it already exists |
 | `createFunction` | `{type: Scene\|Chaser\|Sequence\|Collection, name?, fixtureIds?[]}` | sequences get a hidden bound scene, as upstream does |
 | `renameFunction` / `deleteFunction` | `{id, name?}` | |
 | `setSceneValues` | `{id, values: [{fixture, channel, value}], merge=true}` | `merge=false` clears first |
