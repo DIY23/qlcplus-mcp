@@ -67,7 +67,7 @@ Flags this build accepts (read out of the installed binary, not from memory):
 | Flag | Long form | Meaning |
 |---|---|---|
 | `-w` | `--web` | enable remote web access — **this is the one that opens the socket** |
-| `-wp` | `--web-port` | set the port used for web access (default 9999) |
+| `--web-port <port>` | — | set the port used for web access (default 9999). Use the long form: Qt's parser reads `-wp 9999` as `-w` plus an unknown `-p` and QLC+ refuses to start |
 | `-wa` | `--web-auth` | require users authentication for web access |
 | `-a` | `--web-auth-file` | file the web-access credentials are stored in |
 
